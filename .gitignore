@@ -1,3 +1,7 @@
 .idea
 __pycache__/
 database.db
+.env
+alembic/__pycache__/
+alembic/env.pyc
+alembic/versions/__pycache__/
