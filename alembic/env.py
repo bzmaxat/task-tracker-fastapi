@@ -22,7 +22,10 @@ if config.config_file_name is not None:
 # add your model's MetaData object here
 # for 'autogenerate' support
 load_dotenv()
+
 DATABASE_URL = os.getenv("DATABASE_URL")
+
+config.set_main_option("sqlalchemy.url", DATABASE_URL)
 
 engine = create_engine(DATABASE_URL)
 target_metadata = Base.metadata
