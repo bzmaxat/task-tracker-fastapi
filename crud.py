@@ -30,8 +30,19 @@ def delete_project(db: Session, project_id: int):
 
 
 # TASK CRUD
-def get_tasks(db: Session, skip: int = 0, limit: int = 10):
-    return db.query(models.Task).offset(skip).limit(limit).all()
+def get_tasks(db: Session, project_id: int = None, completed: bool = None, owner_id: int = None, skip: int = 0, limit: int = 10):
+    query = db.query(models.Task)
+
+    if project_id is not None:
+        query = query.filter(models.Task.project_id == project_id)
+
+    if completed is not None:
+        query = query.filter(models.Task.completed == completed)
+
+    if owner_id is not None:
+        query = query.filter(models.Task.owner_id == owner_id)
+
+    return query.offset(skip).limit(limit).all()
 
 
 def get_task(db: Session, task_id: int):
@@ -58,7 +69,6 @@ def update_task(db: Session, task_id: int, task_update: schemas.TaskBase):
         db_task.title = task_update.title
         db_task.description = task_update.description
         db_task.completed = task_update.completed
-        db_task.project_id = task_update.project_id
         db.commit()
         db.refresh(db_task)
     return db_task
