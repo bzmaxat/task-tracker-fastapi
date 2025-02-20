@@ -2,44 +2,53 @@ from typing import List
 
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload, selectinload
+from sqlalchemy.future import select
 
 import auth
 import models
-from database import engine, SessionLocal
 import schemas
 import crud
 from models import Base
+from database import async_engine, AsyncSessionLocal
 
-
-Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title="Task Tracker API",
     version="1.0.0"
 )
 
+
+async def init_db():
+    async with async_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+
+@app.on_event("startup")
+async def startup():
+    await init_db()
+
+
 # OAuth2PasswordBearer token authentication
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+async def get_db():
+    async with AsyncSessionLocal() as session:
+        yield session
 
 
 # PROTECTED ROUTE (Requires JWT)
 @app.get("/users/me/", response_model=schemas.UserResponse, tags=["Users"])
-def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession = Depends(get_db)):
     payload = auth.decode_access_token(token)
     if not payload:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
     username = payload.get("sub")
-    user = db.query(models.User).filter(models.User.username == username).first()
+    result = await db.execute(select(models.User).filter(models.User.username == username))
+    user = result.scalars().first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -48,17 +57,18 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
 
 # REGISTER USER
 @app.post("/register/", response_model=schemas.UserResponse, tags=["Users"])
-def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
-    existing_user = db.query(models.User).filter(models.User.username == user.username).first()
+async def register(user: schemas.UserCreate, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(models.User).filter(models.User.username == user.username))
+    existing_user = result.scalars().first()
     if existing_user:
         raise HTTPException(status_code=400, detail="Username already taken")
-    return crud.create_user(db, user)
+    return await crud.create_user(db, user)
 
 
 # LOGIN (Generate JWT Token)
 @app.post("/token", response_model=schemas.Token, tags=["Users"])
-def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    user = crud.authenticate_user(db, form_data.username, form_data.password)
+async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = Depends(get_db)):
+    user = await crud.authenticate_user(db, form_data.username, form_data.password)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
@@ -69,13 +79,14 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
 
 
 @app.post("/refresh-token", response_model=schemas.Token, tags=["Users"])
-def refresh_token(refresh_token: str, db: Session = Depends(get_db)):
+async def refresh_token(refresh_token: str, db: AsyncSession = Depends(get_db)):
     payload = auth.decode_refresh_token(refresh_token)
     if not payload:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
 
     username = payload.get("sub")
-    user = db.query(models.User).filter(models.User.username == username).first()
+    result = await db.execute(select(models.User).filter(models.User.username == username))
+    user = result.scalars().first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -87,26 +98,26 @@ def refresh_token(refresh_token: str, db: Session = Depends(get_db)):
 # PROJECT ROUTES
 # Create Project (Authenticated User Only)
 @app.post("/projects/", response_model=schemas.ProjectResponse, tags=["Projects"])
-def create_project(project: schemas.ProjectCreate, user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return crud.create_project(db, project, user.id)
+async def create_project(project: schemas.ProjectCreate, user: models.User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    return await crud.create_project(db, project, user.id)
 
 
 @app.get("/projects/", response_model=list[schemas.ProjectResponse], tags=["Projects"])
-def get_projects(skip: int = 0, limit: int = 10, db: Session = Depends(get_db)):
-    return crud.get_projects(db, skip=skip, limit=limit)
+async def get_projects(skip: int = 0, limit: int = 10, db: AsyncSession = Depends(get_db)):
+    return await crud.get_projects(db, skip=skip, limit=limit)
 
 
 @app.get("/projects/{project_id}", response_model=schemas.ProjectResponse, tags=["Projects"])
-def get_project(project_id: int, db: Session = Depends(get_db)):
-    project = crud.get_project(db, project_id)
+async def get_project(project_id: int, db: AsyncSession = Depends(get_db)):
+    project = await crud.get_project(db, project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
     return project
 
 
 @app.delete("/projects/{project_id}", tags=["Projects"])
-def delete_project(project_id: int, db: Session = Depends(get_db)):
-    project = crud.delete_project(db, project_id)
+async def delete_project(project_id: int, db: AsyncSession = Depends(get_db)):
+    project = await crud.delete_project(db, project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
     return {"message": "Project deleted successfully"}
@@ -115,41 +126,41 @@ def delete_project(project_id: int, db: Session = Depends(get_db)):
 # TASK ROUTES
 # Create Task (Authenticated User Only)
 @app.post("/tasks/", response_model=schemas.TaskResponse, tags=["Tasks"])
-def create_task(task: schemas.TaskCreate, user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return crud.create_task(db, task, user.id)
+async def create_task(task: schemas.TaskCreate, user: models.User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    return await crud.create_task(db, task, user.id)
 
 
 @app.get("/tasks/", response_model=list[schemas.TaskResponse], tags=["Tasks"])
-def read_tasks(
+async def read_tasks(
         project_id: int = None,
         completed: bool = None,
         owner_id: int = None,
         skip: int = 0,
         limit: int = 10,
-        db: Session = Depends(get_db)
+        db: AsyncSession = Depends(get_db)
 ):
-    return crud.get_tasks(db, project_id=project_id, completed=completed, owner_id=owner_id, skip=skip, limit=limit)
+    return await crud.get_tasks(db, project_id=project_id, completed=completed, owner_id=owner_id, skip=skip, limit=limit)
 
 
 @app.get("/tasks/{task_id}", response_model=schemas.TaskResponse, tags=["Tasks"])
-def read_task(task_id: int, db: Session = Depends(get_db)):
-    task = crud.get_task(db, task_id)
+async def read_task(task_id: int, db: AsyncSession = Depends(get_db)):
+    task = await crud.get_task(db, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     return task
 
 
 @app.put("/tasks/{task_id}", response_model=schemas.TaskResponse, tags=["Tasks"])
-def update_task(task_id: int, task: schemas.TaskBase, db: Session = Depends(get_db)):
-    updated_task = crud.update_task(db, task_id, task)
+async def update_task(task_id: int, task: schemas.TaskBase, db: AsyncSession = Depends(get_db)):
+    updated_task = await crud.update_task(db, task_id, task)
     if updated_task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     return updated_task
 
 
 @app.delete("/tasks/{task_id}", tags=["Tasks"])
-def delete_task(task_id: int, db: Session = Depends(get_db)):
-    deleted_task = crud.delete_task(db, task_id)
+async def delete_task(task_id: int, db: AsyncSession = Depends(get_db)):
+    deleted_task = await crud.delete_task(db, task_id)
     if deleted_task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     return {"message": "Task deleted successfully"}
@@ -157,14 +168,16 @@ def delete_task(task_id: int, db: Session = Depends(get_db)):
 
 # USER ROUTES
 @app.get("/users/{user_id}/projects", response_model=List[schemas.ProjectResponse])
-def get_user_projects(user_id: int, db: Session = Depends(get_db)):
-    projects = db.query(models.Project).filter(models.Project.owner_id == user_id).all()
+async def get_user_projects(user_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(models.Project).options(selectinload(models.Project.tasks)).filter(models.Project.owner_id == user_id))
+    projects = result.scalars().all()
     return projects
 
 
 @app.get("/users/{user_id}/tasks", response_model=List[schemas.TaskResponse])
-def get_user_tasks(user_id: int, db: Session = Depends(get_db)):
-    tasks = db.query(models.Task).filter(models.Task.owner_id == user_id).all()
+async def get_user_tasks(user_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(models.Task).filter(models.Task.owner_id == user_id))
+    tasks = result.scalars().all()
     return tasks
 
 

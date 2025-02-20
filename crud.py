@@ -1,37 +1,42 @@
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from sqlalchemy.orm import joinedload, selectinload
 import models
 import schemas
 import auth
 
 
 # PROJECT CRUD
-def get_projects(db: Session, skip: int = 0, limit: int = 0):
-    return db.query(models.Project).offset(skip).limit(limit).all()
+async def get_projects(db: AsyncSession, skip: int = 0, limit: int = 0):
+    result = await db.execute(select(models.Project).options(selectinload(models.Project.tasks)).offset(skip).limit(limit))
+    return result.scalars().all()
 
 
-def get_project(db: Session, project_id: int):
-    return db.query(models.Project).filter(models.Project.id == project_id).first()
+async def get_project(db: AsyncSession, project_id: int):
+    result = await db.execute(select(models.Project).options(joinedload(models.Project.tasks)).filter(models.Project.id == project_id))
+    return result.scalars().first()
 
 
-def create_project(db: Session, project: schemas.ProjectCreate, user_id: int):
+async def create_project(db: AsyncSession, project: schemas.ProjectCreate, user_id: int):
     db_project = models.Project(name=project.name, description=project.description, owner_id=user_id)
     db.add(db_project)
-    db.commit()
-    db.refresh(db_project)
+    await db.commit()
+    await db.refresh(db_project)
     return db_project
 
 
-def delete_project(db: Session, project_id: int):
-    db_project = db.query(models.Project).filter(models.Project.id == project_id).first()
+async def delete_project(db: AsyncSession, project_id: int):
+    result = await db.execute(select(models.Project).options(joinedload(models.Project.tasks)).filter(models.Project.id == project_id))
+    db_project = result.scalars().first()
     if db_project:
-        db.delete(db_project)
-        db.commit()
+        await db.delete(db_project)
+        await db.commit()
     return db_project
 
 
 # TASK CRUD
-def get_tasks(db: Session, project_id: int = None, completed: bool = None, owner_id: int = None, skip: int = 0, limit: int = 10):
-    query = db.query(models.Task)
+async def get_tasks(db: AsyncSession, project_id: int = None, completed: bool = None, owner_id: int = None, skip: int = 0, limit: int = 10):
+    query = select(models.Task)
 
     if project_id is not None:
         query = query.filter(models.Task.project_id == project_id)
@@ -42,14 +47,16 @@ def get_tasks(db: Session, project_id: int = None, completed: bool = None, owner
     if owner_id is not None:
         query = query.filter(models.Task.owner_id == owner_id)
 
-    return query.offset(skip).limit(limit).all()
+    result = await db.execute(query.offset(skip).limit(limit))
+    return result.scalars().all()
 
 
-def get_task(db: Session, task_id: int):
-    return db.query(models.Task).filter(models.Task.id == task_id).first()
+async def get_task(db: AsyncSession, task_id: int):
+    result = await db.execute(select(models.Task).filter(models.Task.id == task_id))
+    return result.scalars().first()
 
 
-def create_task(db: Session, task: schemas.TaskCreate, user_id: int):
+async def create_task(db: AsyncSession, task: schemas.TaskCreate, user_id: int):
     db_task = models.Task(
         title=task.title,
         description=task.description,
@@ -58,32 +65,35 @@ def create_task(db: Session, task: schemas.TaskCreate, user_id: int):
         owner_id=user_id
     )
     db.add(db_task)
-    db.commit()
-    db.refresh(db_task)
+    await db.commit()
+    await db.refresh(db_task)
     return db_task
 
 
-def update_task(db: Session, task_id: int, task_update: schemas.TaskBase):
-    db_task = db.query(models.Task).filter(models.Task.id == task_id).first()
+async def update_task(db: AsyncSession, task_id: int, task_update: schemas.TaskBase):
+    result = await db.execute(select(models.Task).filter(models.Task.id == task_id))
+    db_task = result.scalars().first()
+
     if db_task:
         db_task.title = task_update.title
         db_task.description = task_update.description
         db_task.completed = task_update.completed
-        db.commit()
-        db.refresh(db_task)
+        await db.commit()
+        await db.refresh(db_task)
     return db_task
 
 
-def delete_task(db: Session, task_id: int):
-    db_task = db.query(models.Task).filter(models.Task.id == task_id).first()
+async def delete_task(db: AsyncSession, task_id: int):
+    result = await db.execute(select(models.Task).filter(models.Task.id == task_id))
+    db_task = result.scalars().first()
     if db_task:
-        db.delete(db_task)
-        db.commit()
+        await db.delete(db_task)
+        await db.commit()
     return db_task
 
 
 # USER CRUD
-def create_user(db: Session, user: schemas.UserCreate):
+async def create_user(db: AsyncSession, user: schemas.UserCreate):
     hashed_password = auth.hash_password(user.password)
     db_user = models.User(
         username=user.username,
@@ -91,13 +101,14 @@ def create_user(db: Session, user: schemas.UserCreate):
         hashed_password=hashed_password
     )
     db.add(db_user)
-    db.commit()
-    db.refresh(db_user)
+    await db.commit()
+    await db.refresh(db_user)
     return db_user
 
 
-def authenticate_user(db: Session, username: str, password: str):
-    user = db.query(models.User).filter(models.User.username == username).first()
+async def authenticate_user(db: AsyncSession, username: str, password: str):
+    result = await db.execute(select(models.User).filter(models.User.username == username))
+    user = result.scalars().first()
     if user and auth.verify_password(password, user.hashed_password):
         return user
     return None
