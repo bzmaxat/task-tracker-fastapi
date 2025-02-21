@@ -11,7 +11,6 @@ class TaskBase(BaseModel):
 
 class TaskCreate(TaskBase):
     project_id: int
-    owner_id: int
 
 
 class TaskResponse(TaskBase):
@@ -46,6 +45,7 @@ class ProjectResponse(ProjectBase):
 class UserCreate(BaseModel):
     username: str
     email: str
+    full_name: str | None = None
     password: str
 
 
@@ -53,6 +53,7 @@ class UserResponse(BaseModel):
     id: int
     username: str
     email: EmailStr
+    full_name: str
 
     class Config:
         orm_mode = True

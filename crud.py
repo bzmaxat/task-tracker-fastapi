@@ -98,6 +98,7 @@ async def create_user(db: AsyncSession, user: schemas.UserCreate):
     db_user = models.User(
         username=user.username,
         email=user.email,
+        full_name=user.full_name,
         hashed_password=hashed_password
     )
     db.add(db_user)
